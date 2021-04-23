@@ -45,13 +45,13 @@ class Claim:
         self.assertions = assertions
 
     def create_from_json(self,in_json):
-        print("\ncreating from the following json:")
+        print("\n\tDEBUG: creating claim from the following json:")
         print(in_json)
         self.asset_hash = in_json["asset_hash"]
         self.parent = in_json["parent"]
         self.assertions = [assertion_id for assertion_id in in_json["assertions"]]
         self.signature = in_json["signature"]
-        print("final result: " + str(self))
+        print("final result: {}\n".format( str(self)))
 
     def write_to_json(self):
         out_str = "{\n\t"
@@ -115,7 +115,7 @@ class Server:
         self.db = {} # this should be implemented using a decentralized ethereum database
 
     def create_new_image(self,im:Image,additional_info=None):
-        if self.db.get(str(np.array(im))):
+        if self.db.get(np.array(im).data.tobytes()):
             return -1
         else:
             newmetadata = ImageMetaData()
@@ -131,12 +131,12 @@ class Server:
             # print(json_str_first_claim)
             # print(json_str_first_claim)
             newmetadata.claims = json.loads(json_str_first_claim)
-            self.db[str(np.array(im))] = newmetadata
+            self.db[np.array(im).data.tobytes()] = newmetadata
             return 1
 
     def perform_modifications(self,in_im:Image,out_im: Image,mods:json,other_info = None):
         #mods is a json list of json dictionaries
-        im_meta_data = self.db.get(str(np.array(im)))
+        im_meta_data = self.db.get(np.array(im).data.tobytes())
         tmp_assertions = []
         result = in_im
         for mod in mods:
@@ -144,7 +144,17 @@ class Server:
             name = mod["name"]
             args = mod["args"]
             if name == "crop" or name == "resize":
+                print("\tDEBUG: server cropping to size {}, {}".format(args[0],args[1]))
                 result = result.resize((int(args[0]),int(args[1])))
+                # result.show()
+                new_assert = Assertion(name,args,int.from_bytes(sha512(str(np.array(result)).encode('utf-8')).digest(),byteorder="big"),other_info)
+                assert_id = hash(new_assert)
+                im_meta_data.assertions[assert_id] = new_assert
+                tmp_assertions.append(assert_id)
+            elif name == "rotate":
+                print("\tDEBUG: server rotating {} degrees".format(args[0]))
+                result = result.rotate(int(args[0]))
+                # result.show()
                 new_assert = Assertion(name,args,int.from_bytes(sha512(str(np.array(result)).encode('utf-8')).digest(),byteorder="big"),other_info)
                 assert_id = hash(new_assert)
                 im_meta_data.assertions[assert_id] = new_assert
@@ -158,16 +168,17 @@ class Server:
         old_head = im_meta_data.claims["head"]
         im_meta_data.claims["head"] = newclaim.write_to_json()
         im_meta_data.claims["body"].append(old_head)
-        self.db[str(np.array(result))] = im_meta_data
+        # print("inserting metadata into server with key: {}".format(np.array(result).data.tobytes()))
+        self.db[np.array(result).data.tobytes()] = im_meta_data
 
     def verify_metadata(self,im: Image, claim : Claim):
-        if self.db.get(str(np.array(im))):
-            known_metadata = self.db[str(np.array(im))]
+        if self.db.get(np.array(im).data.tobytes()):
+            known_metadata = self.db[np.array(im).data.tobytes()]
             # most_recent_claim = known_metadata.claims["head"]
             most_recent_claim = Claim()
             most_recent_claim.create_from_json(json.loads(known_metadata.claims["head"]))
-            print("most recent: {}".format(most_recent_claim))
-            print("presented: {}".format(claim))
+            print("DEBUG: most recent: {}".format(most_recent_claim.write_to_json()))
+            print("DEBUG: presented: {}".format(claim.write_to_json()))
 
             if hash(most_recent_claim) == hash(claim):
                 return "Claim presented is most recent claim"
@@ -178,7 +189,7 @@ class Server:
 
     def get_all_claims(self,im:Image):
         if self.db.get(str(np.array(im))):
-            metadat = self.db.get(str(np.array(im)))
+            metadat = self.db.get(np.array(im).data.tobytes())
             claims_to_ret = []
             tmp = Claim()
             tmp.create_from_json(metadat["head"])
@@ -192,23 +203,33 @@ class Server:
             return []
 
     def get_metadata(self,im:Image):
-        return self.db.get(str(np.array(im)))
+        return self.db.get(np.array(im).data.tobytes())
 
 
 if __name__ == "__main__":
     server = Server()
+    print("opening image: test_image.jpg...")
     im = Image.open("test_image.jpg")
+    print("done. modifying image...")
     newim = im.resize((500,100))
+    newestim = newim.rotate(45)
+    # newestim.show()
+    print("done.")
+    print("creating registering original image with server...")
     server.create_new_image(im=im)
-    server.perform_modifications(im,newim,json.loads('[{"name":"crop","args":[500,100]}]'))
-    metadata = server.get_metadata(newim)
+    print("done.\nrequesting modifications be registered with the server...")
+    server.perform_modifications(im,newestim,json.loads('[{"name":"crop","args":[500,100]},{"name":"rotate","args":[45]}]'))
+    print("done. receiving metadata for new image from server...")
+    metadata = server.get_metadata(newestim)
+    print("done. packaging the metadata into a claim...")
     most_recent_claim = Claim()
     # print(metadata.claims["head"])
     most_recent_claim.create_from_json(json.loads(metadata.claims["head"]))
-    print("*"*25)
-    print(json.loads(metadata.claims["head"]))
-    print(most_recent_claim)
-    print(server.verify_metadata(newim,most_recent_claim))
-    print(server.get_metadata(im))
+    # print("*"*25)
+    # print(json.loads(metadata.claims["head"]))
+    print("done. most recent claim image hash: {}".format(most_recent_claim))
+    print("verifying metadata with server metadata...")
+    print(server.verify_metadata(newestim,most_recent_claim))
+    print("done.")
 
 
